@@ -228,7 +228,7 @@ def main() -> None:
         weight_decay=cfg["matting"]["weight_decay"],
     )
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=3, verbose=True
+        optimizer, mode="max", factor=0.5, patience=3
     )
 
     # ── Output directory + checkpoint path ────────────────────────────────
