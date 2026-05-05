@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Assignment 5 — Task 2: Neural Style Transfer + Human Matting Pipeline
+# All hyperparameters and paths are configured here.
+#
+# HOW TO USE:
+#   Local  → update the paths under "data:" to point to your machine.
+#   Kaggle → paths are already set for the Kaggle notebook environment.
+#             Override by creating a config_local.yaml and passing
+#             --config config_local.yaml to train.py.
+# ─────────────────────────────────────────────────────────────────────────────
+
+seed: 42
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+# Set dataset_root to the extracted AISegment dataset folder.
+# The folder must contain:  clip_img/  and  matting/  sub-directories.
+#
+# Kaggle dataset URL:
+#   https://www.kaggle.com/datasets/laurentmih/aisegmentcom-matting-human-datasets
+data:
+  # ---- CHANGE THIS to your local path if running locally ----
+  dataset_root: "/kaggle/input/aisegmentcom-matting-human-datasets"
+  # dataset_root: "C:/Users/Ramail/Mainframe/CV-AS-5-TASK2/data/AISegment"  # ← local example
+
+  input_video:  "/kaggle/working/input_video.mp4"    # your recorded video
+  content_dir:  "/kaggle/working/content"
+  style_dir:    "/kaggle/working/style"
+  output_dir:   "/kaggle/working/outputs"
+
+# ── Matting Model (Part A) ────────────────────────────────────────────────────
+matting:
+  architecture: "unet"        # Options: "unet" | "mobilenet_decoder"
+                              # UNet ~31M params, MobileNetDecoder ~4M params
+
+  input_size: [320, 320]      # [H, W] — both 256×256 and 320×320 are valid
+
+  # Training schedule
+  epochs: 25                  # min 20 per spec; 25 gives more headroom
+  batch_size: 16              # reduce to 8 if GPU OOM (e.g. <8 GB VRAM)
+  lr: 1.0e-4                  # Adam initial learning rate
+  weight_decay: 1.0e-5        # L2 regularisation
+
+  # ── Loss weighting ──────────────────────────────────────────────────────
+  # Total = l1_weight × L1(pred, gt)  +  dice_weight × Dice(pred, gt)
+  # Rationale:
+  #   • L1  → dense pixel-level gradient; handles semi-transparent edges well
+  #   • Dice → IoU surrogate; corrects foreground/background class imbalance
+  #   Equal 0.5/0.5 split works well empirically; increase dice_weight if
+  #   val IoU plateaus below 0.80.
+  l1_weight:   0.5
+  dice_weight: 0.5
+
+  patience: 5                 # early-stop if val IoU doesn't improve for N epochs
+  num_workers: 0              # 0 = safe on Windows; increase to 4 on Linux/Mac
+
+  # Working subset of AISegment (~34 k total pairs available)
+  train_size: 5000
+  val_size:   500
+  test_size:  500
+
+  # Where to save the best checkpoint
+  weights_path: "/kaggle/working/matting_weights.pth"
+  # weights_path: "C:/Users/Ramail/Mainframe/CV-AS-5-TASK2/outputs/matting_weights.pth"
+
+# ── Neural Style Transfer (Part B — NST) ─────────────────────────────────────
+nst:
+  # VGG19 layer names used for content and style losses (Gatys et al. 2015)
+  content_layer: "relu4_2"
+  style_layers:
+    - "relu1_1"
+    - "relu2_1"
+    - "relu3_1"
+    - "relu4_1"
+    - "relu5_1"
+  style_layer_weights: [1.0, 1.0, 1.0, 1.0, 1.0]   # equal weighting across style layers
+
+  optimizer: "lbfgs"          # "lbfgs" (fast, high quality) | "adam" (more stable)
+  num_steps: 300              # optimisation iterations per frame / per image
+
+  content_weight: 1.0         # α
+  # Three β values for ablation study (low / medium / high style transfer)
+  style_weights: [1.0e3, 1.0e5, 1.0e7]   # β
+
+  image_size: 512             # resize shorter edge to this before NST
+
+# ── Video Pipeline (Part C) ───────────────────────────────────────────────────
+video:
+  fps: null                   # null = auto-detect from input_video
+  composite_mode: "background"  # "background" → stylise BG, keep subject natural
+                                # "subject"    → stylise subject, keep BG natural
+  temporal_init: true         # initialise each frame's NST from the previous result
+                              # (reduces flickering, speeds up convergence)
