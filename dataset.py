@@ -105,7 +105,7 @@ class AISegmentDataset(Dataset):
         """
         Resolve the corresponding matte path for a given clip image.
 
-        clip_img/<a>/<b>/<name>_clip.jpg  →  matting/<a>/<b>/<name>.png
+        clip_img/<a>/<b>/<name>.jpg  →  matting/<a>/<b>/<name>.png
         """
         parts = list(img_path.parts)
 
@@ -120,17 +120,16 @@ class AISegmentDataset(Dataset):
 
         parts[ci_idx] = "matting"
 
-        # Strip _clip suffix from stem if present
-        stem = img_path.stem
-        if stem.endswith("_clip"):
-            stem = stem[:-5]
-        parts[-1] = stem + ".png"
+        # REMOVE the _clip stripping - just change extension to .png
+        # Original line (remove this): stem = img_path.stem.replace("_clip", "")
+        parts[-1] = img_path.stem + ".png"
+        
         primary = Path(*parts)
         if primary.exists():
             return primary
 
-        # Fallback: keep original stem (no suffix stripping)
-        parts[-1] = img_path.stem + ".png"
+        # Fallback: try with _clip suffix (for compatibility with both formats)
+        parts[-1] = img_path.stem + "_clip.png"
         return Path(*parts)
 
     # ── Spatial augmentations (identical transform on image + matte) ───────
