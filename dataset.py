@@ -104,12 +104,14 @@ class AISegmentDataset(Dataset):
     def _get_matte_path(self, img_path: Path) -> Path:
         """
         Resolve the corresponding matte path for a given clip image.
-
-        clip_img/<a>/<b>/<name>.jpg  →  matting/<a>/<b>/<name>.png
+        
+        Example:
+        clip_img/1803151818/clip_00000000/1803151818-00000003.jpg
+        → matting/1803151818/matting_00000000/1803151818-00000003.png
         """
         parts = list(img_path.parts)
-
-        # Find the clip_img component and replace it
+        
+        # Find the clip_img component and replace it with matting
         try:
             ci_idx = parts.index("clip_img")
         except ValueError:
@@ -117,19 +119,19 @@ class AISegmentDataset(Dataset):
             alt = Path(str(img_path).replace("clip_img", "matting", 1))
             alt = alt.with_suffix(".png")
             return alt
-
+        
         parts[ci_idx] = "matting"
-
-        # REMOVE the _clip stripping - just change extension to .png
-        # Original line (remove this): stem = img_path.stem.replace("_clip", "")
+        
+        # Change folder name from "clip_XXXXXXX" to "matting_XXXXXXX"
+        # Find the folder that starts with "clip_"
+        for i, part in enumerate(parts):
+            if part.startswith("clip_"):
+                parts[i] = part.replace("clip_", "matting_", 1)
+                break
+        
+        # Change extension from .jpg to .png
         parts[-1] = img_path.stem + ".png"
         
-        primary = Path(*parts)
-        if primary.exists():
-            return primary
-
-        # Fallback: try with _clip suffix (for compatibility with both formats)
-        parts[-1] = img_path.stem + "_clip.png"
         return Path(*parts)
 
     # ── Spatial augmentations (identical transform on image + matte) ───────
