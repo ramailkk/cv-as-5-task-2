@@ -94,7 +94,65 @@ python visualise.py curves --log outputs/matting_train_log.csv
 
 ---
 
-## Loss Design
+## Part B: Neural Style Transfer (NST)
+
+Implement the Gatys et al. (2015) algorithm to stylise images.
+
+- **Backbone**: Pretrained VGG19 (frozen).
+- **Layers**: 
+  - Content: `relu4_2`
+  - Style: `relu1_1, relu2_1, relu3_1, relu4_1, relu5_1`
+- **Optimiser**: L-BFGS (for high quality) or Adam (for speed).
+- **Sweep**: β/α ratios ∈ {1e3, 1e5, 1e7}.
+
+---
+
+## Part C: Video Pipeline
+
+Automated pipeline to process videos with human matting and NST.
+
+1. **Inference**: Matting model predicts α_t for each frame.
+2. **Stylisation**: NST generates stylised frame S_t.
+3. **Composition**: 
+   - `background`: α_t·F_t + (1-α_t)·S_t
+   - `subject`: α_t·S_t + (1-α_t)·F_t
+4. **Consistency**: Initialise NST from previous frame (t-1) to reduce flicker.
+
+---
+
+## Running Full Pipeline on Kaggle (Parts B & C)
+
+Use the new **`kaggle_run_all.ipynb`** for a one-click generation of all results.
+
+### Step 1 — Prepare Weights
+Ensure you have `matting_weights.pth` from Part A. The notebook will look for it in `/kaggle/working/` or you can upload it to the repo dir.
+
+### Step 2 — Run All
+Upload and run `kaggle_run_all.ipynb`. It will:
+1. Clone the repo.
+2. Download a sample `input_video.mp4` if missing.
+3. Run `run_all_outputs.py` which generates:
+   - NST Ablations (Grid, β/α sweep, Layer ablation).
+   - Matting Performance (Overlay on video frames).
+   - VGG19 Feature Map Visualisations.
+   - Branded Marketing Poster (1024x1024).
+   - 3x Stylised Videos (Background, Subject, Full).
+
+### Step 3 — Download Results
+All results are zipped into **`parts_bc_results.zip`**.
+
+---
+
+## Local Execution (Full)
+
+```bash
+# Generate all visualisations and videos at once
+python run_all_outputs.py
+```
+
+---
+
+## Loss Design (Part A)
 
 ```
 Total = l1_weight × L1(pred, gt)  +  dice_weight × Dice(pred, gt)
@@ -102,10 +160,8 @@ Total = l1_weight × L1(pred, gt)  +  dice_weight × Dice(pred, gt)
 ```
 
 - **L1** — dense gradient at every pixel, preserves soft alpha values in
-  semi-transparent transition regions (hair, fine edges).
-- **Dice** — IoU surrogate; corrects foreground/background pixel imbalance;
-  directly optimises the evaluation metric. Equal 0.5/0.5 weighting is a
-  well-validated default; raise `dice_weight` to 0.7 if val IoU plateaus below 0.80.
+  semi-transparent transition regions.
+- **Dice** — IoU surrogate; corrects foreground/background pixel imbalance.
 
 ---
 
@@ -113,8 +169,7 @@ Total = l1_weight × L1(pred, gt)  +  dice_weight × Dice(pred, gt)
 
 ```bash
 python model.py
-# Running model smoke test …
-#   unet                  params=31.38M   [OK]
-#   mobilenet_decoder     params=6.62M    [OK]
-# All smoke tests passed.
+# unet                  params=31.38M   [OK]
+# mobilenet_decoder     params=6.62M    [OK]
 ```
+
