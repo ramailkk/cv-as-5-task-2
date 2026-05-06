@@ -1,542 +1,225 @@
 """
-nst.py
-─────────────────────────────────────────────────────────────────────────────
-Neural Style Transfer (Gatys, Ecker, Bethge — CVPR 2015)
-Assignment 5 — Task 2  Part B
+nst.py - Neural Style Transfer (Gatys et al., 2015) using pretrained VGG19
 
-Architecture
-  • Backbone  : pretrained VGG19, FROZEN, eval() mode — never updated.
-  • Content   : relu4_2  (mid-level structural features)
-  • Style     : relu1_1, relu2_1, relu3_1, relu4_1, relu5_1
-                → Gram matrix of feature activations, normalised by H×W×C.
-  • Optimise  : pixels of the generated image (initialised from content frame).
-  • Loss      : L_total = α × L_content + β × L_style
-  • Sweep     : three β/α ratios — 1e3, 1e5, 1e7.
+Public API
+----------
+  run_nst(content_img, style_img, cfg) -> stylized_tensor
 
-Temporal consistency (Part C integration)
-  • When `init_tensor` is supplied the optimisation starts from that tensor
-    instead of the content frame, dramatically reducing inter-frame flicker.
+  content_img : (1, 3, H, W) float32 tensor in [0, 255] ImageNet-normalised
+  style_img   : same format
+  cfg         : dict (see config.yaml, task2.nst section)
+  returns     : (1, 3, H, W) same format as input
 
-Usage (standalone):
-    python nst.py --content content.jpg --style style.jpg --out out.png
-    python nst.py --content content.jpg --style style.jpg \\
-                  --beta_ratio 1e5 --steps 300 --optim lbfgs
+Extra cfg keys (optional):
+  style_layers       : list of int indices of VGG19 output layers to use for style
+                       (default: [0,1,2,3,5]  → relu1_1, relu2_1, relu3_1, relu4_1, relu5_1)
+  style_layer_weights: list of floats, same length as style_layers (default: all 1.0)
 """
 
-from __future__ import annotations
-
-import argparse
-import copy
 import sys
 from pathlib import Path
-from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from PIL import Image
-from torchvision import models, transforms
-from torchvision.models import VGG19_Weights
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  VGG19 layer-name → module index mapping (features sequential)
-#  Names follow the Gatys notation: conv{block}_{conv}, relu{block}_{conv}
-# ─────────────────────────────────────────────────────────────────────────────
-
-VGG19_LAYER_MAP: dict[str, int] = {
-    "conv1_1": 0,  "relu1_1": 1,
-    "conv1_2": 2,  "relu1_2": 3,
-    "pool1"  : 4,
-    "conv2_1": 5,  "relu2_1": 6,
-    "conv2_2": 7,  "relu2_2": 8,
-    "pool2"  : 9,
-    "conv3_1": 10, "relu3_1": 11,
-    "conv3_2": 12, "relu3_2": 13,
-    "conv3_3": 14, "relu3_3": 15,
-    "conv3_4": 16, "relu3_4": 17,
-    "pool3"  : 18,
-    "conv4_1": 19, "relu4_1": 20,
-    "conv4_2": 21, "relu4_2": 22,
-    "conv4_3": 23, "relu4_3": 24,
-    "conv4_4": 25, "relu4_4": 26,
-    "pool4"  : 27,
-    "conv5_1": 28, "relu5_1": 29,
-    "conv5_2": 30, "relu5_2": 31,
-    "conv5_3": 32, "relu5_3": 33,
-    "conv5_4": 34, "relu5_4": 35,
-    "pool5"  : 36,
-}
-
-# Normalisation constants for VGG19 (ImageNet mean / std)
-_IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
-_IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225])
+from torch.optim import Adam, LBFGS
+import torchvision.models as tv_models
+import numpy as np
+import cv2
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Feature extractor
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# ImageNet statistics
+# ---------------------------------------------------------------------------
+IMAGENET_MEAN_255 = torch.tensor([123.675, 116.28, 103.53]).view(1, 3, 1, 1)
+IMAGENET_STD_1    = torch.tensor([1.0,     1.0,    1.0   ]).view(1, 3, 1, 1)
 
-class VGG19FeatureExtractor(nn.Module):
+
+# ---------------------------------------------------------------------------
+# Image I/O utilities
+# ---------------------------------------------------------------------------
+
+def load_img_as_tensor(img_path: str, height: int, device: torch.device) -> torch.Tensor:
     """
-    Pretrained VGG19 feature extractor.
-
-    • Always in eval() mode.
-    • Parameters are frozen (requires_grad=False).
-    • Returns a dict of named intermediate activations.
-    • Applies ImageNet normalisation internally so callers pass [0,1] tensors.
+    Load an image from disk, resize to `height` (preserving aspect ratio),
+    and return a (1, 3, H, W) float32 tensor in [0, 255], ImageNet-normalised.
     """
+    img = cv2.imread(img_path)
+    if img is None:
+        raise FileNotFoundError(f"Cannot read image: {img_path}")
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    h, w = img.shape[:2]
+    new_w = int(w * height / h)
+    img = cv2.resize(img, (new_w, height), interpolation=cv2.INTER_CUBIC)
+    img = img.astype(np.float32)            # [0, 255]
+    t   = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0)  # 1,3,H,W
+    t    = (t.to(device) - IMAGENET_MEAN_255.to(device))
+    return t
 
-    def __init__(self, layer_names: list[str], device: torch.device):
+
+def tensor_to_uint8(t: torch.Tensor) -> np.ndarray:
+    """Convert (1,3,H,W) ImageNet-normalised tensor → uint8 RGB."""
+    img = (t + IMAGENET_MEAN_255.to(t.device)).squeeze(0).permute(1,2,0).detach().cpu().numpy()
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+def save_tensor_as_img(t: torch.Tensor, path: str):
+    img = tensor_to_uint8(t)
+    cv2.imwrite(path, img[:, :, ::-1])  # RGB → BGR
+
+
+# ---------------------------------------------------------------------------
+# VGG19 feature extractor (returns 6 layers)
+# ---------------------------------------------------------------------------
+
+class VGG19Features(nn.Module):
+    """
+    Pretrained VGG19 with six intermediate outputs:
+      index 0: relu1_1, 1: relu2_1, 2: relu3_1, 3: relu4_1, 4: conv4_2, 5: relu5_1
+    """
+    def __init__(self):
         super().__init__()
+        vgg = tv_models.vgg19(weights=tv_models.VGG19_Weights.IMAGENET1K_V1).features
+        cuts = [1, 6, 11, 20, 21, 29]   # inclusive end indices for each slice
+        self.slices = nn.ModuleList()
+        prev = 0
+        for cut in cuts:
+            self.slices.append(nn.Sequential(*[vgg[i] for i in range(prev, cut + 1)]))
+            prev = cut + 1
+        for p in self.parameters():
+            p.requires_grad = False
 
-        vgg = models.vgg19(weights=VGG19_Weights.IMAGENET1K_V1)
-        self.features: nn.Sequential = vgg.features
-
-        # Freeze ALL parameters — VGG is never updated
-        for param in self.features.parameters():
-            param.requires_grad_(False)
-        self.features.eval()
-
-        # Resolve requested layer names → feature indices
-        self._layer_names = layer_names
-        self._layer_indices: dict[str, int] = {}
-        for name in layer_names:
-            if name not in VGG19_LAYER_MAP:
-                raise ValueError(
-                    f"Unknown VGG19 layer: {name!r}. "
-                    f"Valid options: {sorted(VGG19_LAYER_MAP.keys())}"
-                )
-            self._layer_indices[name] = VGG19_LAYER_MAP[name]
-
-        self._max_idx = max(self._layer_indices.values())
-
-        # ImageNet normalisation (registered as buffers — move with .to(device))
-        self.register_buffer("mean", _IMAGENET_MEAN.view(1, 3, 1, 1))
-        self.register_buffer("std",  _IMAGENET_STD.view(1, 3, 1, 1))
-
-        self.to(device)
-
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        """
-        Parameters
-        ----------
-        x : (B, 3, H, W) tensor, values in [0, 1]
-
-        Returns
-        -------
-        dict  {layer_name: feature_tensor}
-        """
-        # ImageNet normalisation
-        x = (x - self.mean) / self.std
-
-        outputs: dict[str, torch.Tensor] = {}
-        for idx, layer in enumerate(self.features):
-            x = layer(x)
-            # Check each layer index
-            for name, target_idx in self._layer_indices.items():
-                if idx == target_idx:
-                    outputs[name] = x
-            if idx >= self._max_idx:
-                break  # Early exit — no need to run deeper layers
-
-        return outputs
+    def forward(self, x):
+        outs = []
+        for s in self.slices:
+            x = s(x)
+            outs.append(x)
+        return outs  # list of 6 tensors
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Gram matrix
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Gram matrix & TV loss
+# ---------------------------------------------------------------------------
 
-def gram_matrix(feat: torch.Tensor) -> torch.Tensor:
-    """
-    Compute normalised Gram matrix of a feature map.
-
-    Parameters
-    ----------
-    feat : (B, C, H, W)
-
-    Returns
-    -------
-    G    : (B, C, C)  — G_ij = (1 / C·H·W) · Σ_hw feat_ih · feat_jh
-    """
-    B, C, H, W = feat.shape
-    # Reshape to (B, C, H*W)
-    f = feat.view(B, C, H * W)
-    # (B, C, C)
-    G = torch.bmm(f, f.transpose(1, 2))
-    # Normalise by number of elements
-    return G / (C * H * W)
+def gram_matrix(x: torch.Tensor) -> torch.Tensor:
+    b, c, h, w = x.shape
+    feat = x.view(b, c, h * w)
+    gram = feat.bmm(feat.transpose(1, 2))
+    return gram / (c * h * w)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Loss functions
-# ─────────────────────────────────────────────────────────────────────────────
-
-def content_loss(gen_feat: torch.Tensor, content_feat: torch.Tensor) -> torch.Tensor:
-    """Mean-squared difference between generated and content feature maps."""
-    return F.mse_loss(gen_feat, content_feat)
+def total_variation(x: torch.Tensor) -> torch.Tensor:
+    return (torch.sum(torch.abs(x[:, :, :, :-1] - x[:, :, :, 1:])) +
+            torch.sum(torch.abs(x[:, :, :-1, :] - x[:, :, 1:, :])))
 
 
-def style_loss(
-    gen_feats:   dict[str, torch.Tensor],
-    style_grams: dict[str, torch.Tensor],
-    layer_weights: dict[str, float],
-) -> torch.Tensor:
-    """
-    Weighted sum of MSE between Gram matrices across style layers.
-
-    Parameters
-    ----------
-    gen_feats     : {layer_name: feature tensor (B,C,H,W)} from generated image
-    style_grams   : {layer_name: gram matrix (B,C,C)} pre-computed from style image
-    layer_weights : {layer_name: scalar weight}
-    """
-    loss = torch.tensor(0.0, device=next(iter(gen_feats.values())).device)
-    for name in style_grams:
-        G_gen   = gram_matrix(gen_feats[name])
-        G_style = style_grams[name]
-        loss    = loss + layer_weights[name] * F.mse_loss(G_gen, G_style)
-    return loss
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Image helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def load_image(path: Path | str, size: int | None = None) -> torch.Tensor:
-    """
-    Load a PIL image → (1, 3, H, W) float tensor in [0, 1].
-
-    Parameters
-    ----------
-    path : file path
-    size : if given, resize shorter edge to this value (preserving aspect)
-    """
-    img = Image.open(path).convert("RGB")
-    if size is not None:
-        w, h = img.size
-        if h < w:
-            new_h = size
-            new_w = int(w * size / h)
-        else:
-            new_w = size
-            new_h = int(h * size / w)
-        img = img.resize((new_w, new_h), Image.LANCZOS)
-    t = transforms.ToTensor()(img)  # (3, H, W) in [0,1]
-    return t.unsqueeze(0)           # (1, 3, H, W)
-
-
-def tensor_to_pil(t: torch.Tensor) -> Image.Image:
-    """Convert (1, 3, H, W) or (3, H, W) tensor in [0,1] → PIL RGB Image."""
-    t = t.squeeze(0).clamp(0, 1).cpu()
-    return transforms.ToPILImage()(t)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Core NST optimisation
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Core NST routine (supports custom style layers)
+# ---------------------------------------------------------------------------
 
 def run_nst(
     content_tensor: torch.Tensor,
     style_tensor:   torch.Tensor,
-    device:         torch.device,
-    content_layer:  str  = "relu4_2",
-    style_layers:   list[str] = None,
-    style_layer_weights: list[float] = None,
-    content_weight: float = 1.0,        # α
-    style_weight:   float = 1e5,        # β
-    num_steps:      int   = 300,
-    optimizer:      str   = "lbfgs",    # "lbfgs" | "adam"
-    init_tensor:    Optional[torch.Tensor] = None,
-    verbose:        bool  = True,
-    log_every:      int   = 50,
+    cfg:            dict,
+    init_tensor:    torch.Tensor | None = None,
+    verbose:        bool = False,
 ) -> torch.Tensor:
     """
-    Run Neural Style Transfer.
-
-    Parameters
-    ----------
-    content_tensor       : (1, 3, H, W) in [0,1]  — the content image / frame
-    style_tensor         : (1, 3, H, W) in [0,1]  — the style artwork
-    device               : torch.device
-    content_layer        : VGG19 layer name for content loss
-    style_layers         : list of VGG19 layer names for style loss
-    style_layer_weights  : per-layer weights (defaults to equal 1.0)
-    content_weight       : α — scaling factor for content loss
-    style_weight         : β — scaling factor for style loss
-    num_steps            : number of optimisation steps
-    optimizer            : "lbfgs" or "adam"
-    init_tensor          : optional (1,3,H,W) tensor to initialise from
-                           (supply previous stylised frame for temporal consistency)
-    verbose              : print loss every log_every steps
-    log_every            : print interval
-
-    Returns
-    -------
-    (1, 3, H, W) float tensor in [0, 1] — stylised image
+    cfg can contain:
+      content_weight (default 1e5)
+      style_weight   (default 3e4)
+      tv_weight      (default 1.0)
+      iterations     (default 500)
+      optimizer      ('lbfgs' or 'adam', default 'lbfgs')
+      adam_lr        (default 1e1)
+      height         (for loading, not used here)
+      style_layers   : list of int indices from VGG19Features (default [0,1,2,3,5])
+      style_layer_weights : list of floats (default all 1.0)
     """
-    if style_layers is None:
-        style_layers = ["relu1_1", "relu2_1", "relu3_1", "relu4_1", "relu5_1"]
-    if style_layer_weights is None:
-        style_layer_weights = [1.0] * len(style_layers)
+    device = content_tensor.device
+    vgg = VGG19Features().to(device).eval()
 
-    all_layers = list({content_layer} | set(style_layers))
-    layer_weight_map = dict(zip(style_layers, style_layer_weights))
-
-    # Build VGG19 extractor (frozen, eval)
-    extractor = VGG19FeatureExtractor(all_layers, device)
-    extractor.eval()
-
-    # Move inputs to device
-    content_tensor = content_tensor.to(device)
-    style_tensor   = style_tensor.to(device)
-
-    # Resize style to match content spatial dims if needed
-    if style_tensor.shape[2:] != content_tensor.shape[2:]:
-        style_tensor = F.interpolate(
-            style_tensor, size=content_tensor.shape[2:],
-            mode="bilinear", align_corners=False,
-        )
-
-    # Pre-compute target features (no grad needed)
+    # ---- extract target features ----
     with torch.no_grad():
-        content_feats = extractor(content_tensor)
-        content_target = content_feats[content_layer].detach()
+        content_feats = vgg(content_tensor)
+        style_feats   = vgg(style_tensor)
 
-        style_feats = extractor(style_tensor)
-        style_grams = {
-            name: gram_matrix(style_feats[name]).detach()
-            for name in style_layers
-        }
+    target_content = content_feats[4].squeeze(0).detach()   # conv4_2 is index 4
 
-    # Initialise generated image (pixel optimisation)
+    # ---- custom style layers ----
+    style_idxs = cfg.get("style_layers", [0, 1, 2, 3, 5])   # default relu1_1 ... relu5_1
+    style_weights = cfg.get("style_layer_weights", [1.0] * len(style_idxs))
+    if len(style_weights) != len(style_idxs):
+        style_weights = [1.0] * len(style_idxs)
+
+    target_style = []
+    for idx in style_idxs:
+        gram = gram_matrix(style_feats[idx]).detach()
+        target_style.append(gram)
+
+    # ---- initialise optimisation image ----
     if init_tensor is not None:
-        gen = init_tensor.clone().to(device)
+        opt_img = init_tensor.clone().detach().requires_grad_(True)
     else:
-        gen = content_tensor.clone()
-    gen = gen.requires_grad_(True)
+        opt_img = content_tensor.clone().detach().requires_grad_(True)
 
-    # Optimiser
-    if optimizer.lower() == "lbfgs":
-        optim = torch.optim.LBFGS([gen], lr=1.0, max_iter=20)
-    elif optimizer.lower() == "adam":
-        optim = torch.optim.Adam([gen], lr=0.01)
+    content_w = cfg.get("content_weight", 1e5)
+    style_w   = cfg.get("style_weight",   3e4)
+    tv_w      = cfg.get("tv_weight",      1.0)
+    optimizer_name = cfg.get("optimizer", "lbfgs").lower()
+    max_iter = cfg.get("iterations", 500)
+    lr = cfg.get("adam_lr", 1e1)
+
+    # ---- loss closure ----
+    def compute_loss():
+        feats = vgg(opt_img)
+
+        # content loss (index 4)
+        c_loss = F.mse_loss(feats[4].squeeze(0), target_content)
+
+        # style loss (only requested layers)
+        s_loss = 0.0
+        for idx_out, idx in enumerate(style_idxs):
+            cur_gram = gram_matrix(feats[idx])
+            tgt_gram = target_style[idx_out]
+            s_loss += style_weights[idx_out] * F.mse_loss(cur_gram, tgt_gram)
+        s_loss = s_loss / len(style_idxs)
+
+        tv_loss = total_variation(opt_img)
+        total = content_w * c_loss + style_w * s_loss + tv_w * tv_loss
+        return total, c_loss, s_loss, tv_loss
+
+    # ---- optimisation ----
+    if optimizer_name == "adam":
+        opt = Adam([opt_img], lr=lr)
+        for it in range(max_iter):
+            opt.zero_grad()
+            total, c, s, tv = compute_loss()
+            total.backward()
+            opt.step()
+            if verbose and it % 50 == 0:
+                print(f"  Adam iter {it:04d} | total={total.item():.2f} "
+                      f"content={content_w*c.item():.2f} "
+                      f"style={style_w*s.item():.2f} "
+                      f"tv={tv_w*tv.item():.2f}")
+
+    elif optimizer_name == "lbfgs":
+        opt = LBFGS([opt_img], max_iter=max_iter, line_search_fn="strong_wolfe")
+        cnt = [0]
+        def closure():
+            opt.zero_grad()
+            total, c, s, tv = compute_loss()
+            total.backward()
+            if verbose and cnt[0] % 50 == 0:
+                print(f"  L-BFGS iter {cnt[0]:04d} | total={total.item():.2f} "
+                      f"content={content_w*c.item():.2f} "
+                      f"style={style_w*s.item():.2f} "
+                      f"tv={tv_w*tv.item():.2f}")
+            cnt[0] += 1
+            return total
+        opt.step(closure)
+
     else:
-        raise ValueError(f"Unknown optimizer: {optimizer!r}. Use 'lbfgs' or 'adam'.")
+        raise ValueError(f"Unknown optimizer: {optimizer_name}")
 
-    # ── Optimisation loop ────────────────────────────────────────────────────
-    step = [0]
-    last_loss = [float("inf")]
-
-    def closure():
-        with torch.no_grad():
-            gen.clamp_(0, 1)
-        optim.zero_grad()
-
-        gen_feats = extractor(gen)
-
-        # Content loss
-        c_loss = content_loss(gen_feats[content_layer], content_target)
-
-        # Style loss
-        s_loss = style_loss(gen_feats, style_grams, layer_weight_map)
-
-        total = content_weight * c_loss + style_weight * s_loss
-        total.backward()
-
-        step[0] += 1
-        last_loss[0] = total.item()
-
-        if verbose and step[0] % log_every == 0:
-            print(
-                f"  Step {step[0]:4d}/{num_steps} | "
-                f"Total={total.item():.4e} | "
-                f"Content={c_loss.item():.4e} | "
-                f"Style={s_loss.item():.4e}"
-            )
-        return total
-
-    if optimizer.lower() == "lbfgs":
-        # L-BFGS calls closure multiple times per step (line search)
-        # We wrap in a counter-based loop
-        lbfgs_steps = max(1, num_steps // 20)  # each LBFGS step = ~20 func evals
-        for _ in range(lbfgs_steps):
-            optim.step(closure)
-    else:
-        for _ in range(num_steps):
-            optim.step(closure)
-
-    with torch.no_grad():
-        gen.clamp_(0, 1)
-
-    return gen.detach()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Style-ratio sweep helper
-# ─────────────────────────────────────────────────────────────────────────────
-
-def style_ratio_sweep(
-    content_tensor: torch.Tensor,
-    style_tensor:   torch.Tensor,
-    device:         torch.device,
-    beta_ratios:    list[float] = (1e3, 1e5, 1e7),
-    content_weight: float = 1.0,
-    **nst_kwargs,
-) -> dict[float, torch.Tensor]:
-    """
-    Run NST for each β/α ratio and return a dict {beta_ratio: stylised_tensor}.
-
-    Parameters
-    ----------
-    content_tensor : (1,3,H,W) in [0,1]
-    style_tensor   : (1,3,H,W) in [0,1]
-    device         : torch.device
-    beta_ratios    : iterable of β/α values to sweep
-    content_weight : α (kept fixed, β = ratio × α)
-    **nst_kwargs   : forwarded to run_nst()
-
-    Returns
-    -------
-    dict mapping each beta_ratio → stylised image tensor (1,3,H,W)
-    """
-    results: dict[float, torch.Tensor] = {}
-    for ratio in beta_ratios:
-        beta = ratio * content_weight
-        print(f"\n{'─'*60}")
-        print(f"  β/α = {ratio:.0e}   (α={content_weight}, β={beta:.0e})")
-        print(f"{'─'*60}")
-        out = run_nst(
-            content_tensor=content_tensor,
-            style_tensor=style_tensor,
-            device=device,
-            content_weight=content_weight,
-            style_weight=beta,
-            **nst_kwargs,
-        )
-        results[ratio] = out
-    return results
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  CLI — standalone usage
-# ─────────────────────────────────────────────────────────────────────────────
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Neural Style Transfer — Part B (Assignment 5, Task 2)"
-    )
-    p.add_argument("--content",    required=True, help="Path to content image")
-    p.add_argument("--style",      required=True, help="Path to style image")
-    p.add_argument("--out",        default="nst_output.png",
-                   help="Output path (single run) or directory prefix (sweep mode)")
-    p.add_argument("--beta_ratio", type=float, default=1e5,
-                   help="β/α ratio  (default: 1e5). Ignored in --sweep mode.")
-    p.add_argument("--sweep",      action="store_true",
-                   help="Run all three β/α ratios: 1e3, 1e5, 1e7")
-    p.add_argument("--steps",      type=int, default=300,
-                   help="Optimisation steps (default: 300)")
-    p.add_argument("--optim",      default="lbfgs", choices=["lbfgs", "adam"],
-                   help="Pixel optimizer (default: lbfgs)")
-    p.add_argument("--size",       type=int, default=512,
-                   help="Shorter-edge resize before NST (default: 512)")
-    p.add_argument("--content_layer", default="relu4_2",
-                   help="VGG19 content layer (default: relu4_2)")
-    p.add_argument("--style_layers",  nargs="+",
-                   default=["relu1_1", "relu2_1", "relu3_1", "relu4_1", "relu5_1"],
-                   help="VGG19 style layers")
-    p.add_argument("--device",     default=None,
-                   help="Force device: cpu | cuda | cuda:0 (auto if omitted)")
-    p.add_argument("--quiet",      action="store_true",
-                   help="Suppress per-step logs")
-    return p.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-
-    # Device
-    if args.device:
-        device = torch.device(args.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device : {device}")
-
-    # Load images
-    content = load_image(args.content, size=args.size).to(device)
-    style   = load_image(args.style,   size=args.size).to(device)
-    print(f"Content : {Path(args.content).name}  {tuple(content.shape)}")
-    print(f"Style   : {Path(args.style).name}    {tuple(style.shape)}")
-
-    nst_kwargs = dict(
-        content_layer=args.content_layer,
-        style_layers=args.style_layers,
-        num_steps=args.steps,
-        optimizer=args.optim,
-        verbose=not args.quiet,
-    )
-
-    if args.sweep:
-        results = style_ratio_sweep(
-            content, style, device,
-            beta_ratios=[1e3, 1e5, 1e7],
-            **nst_kwargs,
-        )
-        out_dir = Path(args.out)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for ratio, t in results.items():
-            fname = out_dir / f"nst_beta_{ratio:.0e}.png"
-            tensor_to_pil(t).save(fname)
-            print(f"  Saved: {fname}")
-
-        # Save side-by-side comparison
-        _save_sweep_comparison(
-            content, style, results,
-            out_path=out_dir / "nst_sweep_comparison.png",
-        )
-    else:
-        out = run_nst(
-            content, style, device,
-            style_weight=args.beta_ratio,
-            **nst_kwargs,
-        )
-        out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        tensor_to_pil(out).save(out_path)
-        print(f"\n✓  Saved: {out_path}")
-
-
-def _save_sweep_comparison(
-    content: torch.Tensor,
-    style:   torch.Tensor,
-    results: dict[float, torch.Tensor],
-    out_path: Path,
-) -> None:
-    """Save a side-by-side comparison of content, style, and all three ratios."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-
-        cols   = ["Content", "Style"] + [f"β/α = {r:.0e}" for r in results]
-        images = [tensor_to_pil(content), tensor_to_pil(style)] + [
-            tensor_to_pil(t) for t in results.values()
-        ]
-        n = len(images)
-        fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
-        for ax, img, title in zip(axes, images, cols):
-            ax.imshow(np.array(img))
-            ax.set_title(title, fontsize=12, fontweight="bold")
-            ax.axis("off")
-
-        plt.suptitle("NST Style Ratio Sweep (Gatys et al. 2015)", fontsize=14)
-        plt.tight_layout()
-        plt.savefig(out_path, dpi=120, bbox_inches="tight")
-        plt.close()
-        print(f"\n✓  Sweep comparison saved: {out_path}")
-    except ImportError:
-        print("  matplotlib not available — sweep comparison figure skipped.")
-
-
-if __name__ == "__main__":
-    main()
+    return opt_img.detach()
