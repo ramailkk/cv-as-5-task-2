@@ -188,7 +188,7 @@ plt.close()
 print("  ✓  grid.png saved")
 
 # ----------------------------------------------------------------------
-# 2. β/α Ablation (per style)
+# 2. β/α Ablation (Consolidated: All styles in one figure)
 # ----------------------------------------------------------------------
 print("\n" + "="*60)
 print("  [2/7] β/α Ablation (1e3 / 1e5 / 1e7) for ALL styles")
@@ -196,10 +196,16 @@ print("="*60)
 
 cpath = CONTENT_FILES[2] if len(CONTENT_FILES) > 2 else CONTENT_FILES[0]
 ct = new_load_image(cpath, NST_SIZE)
+NS = len(STYLE_FILES)
+
+fig, axes = plt.subplots(NS, 5, figsize=(20, 4 * NS))
+fig.patch.set_facecolor("#111")
+if NS == 1: axes = axes.reshape(1, -1) # handle single style case
 
 for si, spath in enumerate(STYLE_FILES):
     print(f"\n  Style {si+1}: {spath.name}")
     st = new_load_image(spath, NST_SIZE)
+    
     ablation_imgs = {}
     for beta in [1e3, 1e5, 1e7]:
         print(f"    β/α = {beta:.0e} ...", end=" ", flush=True)
@@ -209,32 +215,44 @@ for si, spath in enumerate(STYLE_FILES):
         out = run_nst(ct, st, cfg, verbose=False)
         ablation_imgs[beta] = out
         print(f"{time.time()-t0:.1f}s")
-    fig, axes = plt.subplots(1, 5, figsize=(20,4))
-    fig.patch.set_facecolor("#111")
-    titles = ["Content", "Style"] + [f"β/α = {r:.0e}" for r in [1e3,1e5,1e7]]
+
+    titles = ["Content", "Style"] + [f"β/α = {r:.0e}" for r in [1e3, 1e5, 1e7]]
     imgs = [Image.open(cpath).convert("RGB"), Image.open(spath).convert("RGB"),
             tensor_to_pil_new(ablation_imgs[1e3]), tensor_to_pil_new(ablation_imgs[1e5]), tensor_to_pil_new(ablation_imgs[1e7])]
     colors = ["white","#FBD38D","#68D391","#63B3ED","#FC8181"]
-    for ax, img, title, color in zip(axes, imgs, titles, colors):
-        ax.imshow(img); ax.axis("off"); ax.set_title(title, color=color, fontsize=12)
-    fig.suptitle(f"β/α Ablation — {spath.stem.replace('style_','').capitalize()}", color="white", fontsize=13)
-    plt.tight_layout()
-    out_name = f"beta_alpha_ablation_{spath.stem}.png"
-    fig.savefig(OUTPUT_DIR/out_name, dpi=120, bbox_inches="tight", facecolor="#111")
-    plt.close()
-    print(f"  ✓  {out_name} saved")
+    
+    for col, (img, title, color) in enumerate(zip(imgs, titles, colors)):
+        ax = axes[si, col]
+        ax.imshow(img); ax.axis("off")
+        if si == 0:
+            ax.set_title(title, color=color, fontsize=14, fontweight="bold")
+        if col == 0:
+            # Label the row with style name
+            ax.text(-10, NST_SIZE//2, spath.stem.replace("style_","").capitalize(), 
+                    color="#FBD38D", fontsize=14, fontweight="bold", 
+                    ha="right", va="center", rotation=90)
+
+fig.suptitle("Style Weight (β/α) Ablation Study", color="white", fontsize=20, fontweight="bold", y=1.02)
+plt.tight_layout()
+out_name = "beta_alpha_ablation.png"
+fig.savefig(OUTPUT_DIR/out_name, dpi=120, bbox_inches="tight", facecolor="#111")
+plt.close()
+print(f"  ✓  {out_name} saved")
 
 # ----------------------------------------------------------------------
-# 3. LAYER ABLATION (using custom style_layers in cfg)
+# 3. LAYER ABLATION (Consolidated: All styles in one figure)
 # ----------------------------------------------------------------------
 print("\n" + "="*60)
 print("  [3/7] Layer Ablation (shallow vs deep) for ALL styles")
 print("="*60)
 
-# Map layer names to VGG19Features indices:
 # 0=relu1_1, 1=relu2_1, 2=relu3_1, 3=relu4_1, 4=conv4_2 (content), 5=relu5_1
 shallow_indices = [0, 1]   # relu1_1, relu2_1
 deep_indices    = [3, 5]   # relu4_1, relu5_1
+
+fig, axes = plt.subplots(NS, 4, figsize=(16, 4 * NS))
+fig.patch.set_facecolor("#111")
+if NS == 1: axes = axes.reshape(1, -1)
 
 for si, spath in enumerate(STYLE_FILES):
     print(f"\n  Style {si+1}: {spath.name}")
@@ -249,22 +267,30 @@ for si, spath in enumerate(STYLE_FILES):
         out = run_nst(ct, st, cfg, verbose=False)
         ablation_imgs[name] = out
         print(f"{time.time()-t0:.1f}s")
-    fig, axes = plt.subplots(1, 4, figsize=(16,4))
-    fig.patch.set_facecolor("#111")
+    
     panels = [
         ("Content", Image.open(cpath).convert("RGB"), "white"),
         ("Style", Image.open(spath).convert("RGB"), "#FBD38D"),
-        ("Shallow (texture/colour)", tensor_to_pil_new(ablation_imgs["shallow"]), "#68D391"),
-        ("Deep (structure)", tensor_to_pil_new(ablation_imgs["deep"]), "#FC8181"),
+        ("Shallow (Texture)", tensor_to_pil_new(ablation_imgs["shallow"]), "#68D391"),
+        ("Deep (Structure)", tensor_to_pil_new(ablation_imgs["deep"]), "#FC8181"),
     ]
-    for ax, (title, img, color) in zip(axes, panels):
-        ax.imshow(img); ax.axis("off"); ax.set_title(title, color=color, fontsize=10)
-    fig.suptitle(f"Layer Ablation — {spath.stem.replace('style_','').capitalize()}", color="white", fontsize=12)
-    plt.tight_layout()
-    out_name = f"layer_ablation_{spath.stem}.png"
-    fig.savefig(OUTPUT_DIR/out_name, dpi=120, bbox_inches="tight", facecolor="#111")
-    plt.close()
-    print(f"  ✓  {out_name} saved")
+    
+    for col, (title, img, color) in enumerate(panels):
+        ax = axes[si, col]
+        ax.imshow(img); ax.axis("off")
+        if si == 0:
+            ax.set_title(title, color=color, fontsize=12, fontweight="bold")
+        if col == 0:
+            ax.text(-10, NST_SIZE//2, spath.stem.replace("style_","").capitalize(), 
+                    color="#FBD38D", fontsize=12, fontweight="bold", 
+                    ha="right", va="center", rotation=90)
+
+fig.suptitle("Style Layer Ablation Study: Shallow vs Deep", color="white", fontsize=18, fontweight="bold", y=1.02)
+plt.tight_layout()
+out_name = "layer_ablation.png"
+fig.savefig(OUTPUT_DIR/out_name, dpi=120, bbox_inches="tight", facecolor="#111")
+plt.close()
+print(f"  ✓  {out_name} saved")
 
 # ----------------------------------------------------------------------
 # 4. Matting Overlay (unchanged)
