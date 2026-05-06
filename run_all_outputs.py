@@ -204,79 +204,88 @@ print(f"  ✓  grid.png saved")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2.  β/α ABLATION
+# 2.  β/α ABLATION (Rigorous: for every style)
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
-print("  [2/7] β/α Ablation (1e3 / 1e5 / 1e7)")
+print("  [2/7] β/α Ablation (1e3 / 1e5 / 1e7) for ALL styles")
 print("="*60)
 
-cpath = CONTENT_FILES[2]  # middle frame
-spath = STYLE_FILES[0]    # starry night
+cpath = CONTENT_FILES[2] if len(CONTENT_FILES) > 2 else CONTENT_FILES[0]
 ct = nst_load_image(cpath, size=NST_SIZE).to(DEVICE)
-st = nst_load_image(spath, size=NST_SIZE).to(DEVICE)
 
-ablation_imgs = {}
-for beta_ratio in [1e3, 1e5, 1e7]:
-    print(f"  β/α = {beta_ratio:.0e} ...", end=" ", flush=True)
-    t0 = time.time()
-    out = run_nst(ct, st, DEVICE, content_weight=1.0, style_weight=beta_ratio,
-                  num_steps=NST_STEPS, optimizer=NST_OPTIM, verbose=False)
-    ablation_imgs[beta_ratio] = out
-    print(f"{time.time()-t0:.1f}s")
+for si, spath in enumerate(STYLE_FILES):
+    print(f"\n  Style {si+1}/{len(STYLE_FILES)}: {spath.name}")
+    st = nst_load_image(spath, size=NST_SIZE).to(DEVICE)
+    
+    ablation_imgs = {}
+    for beta_ratio in [1e3, 1e5, 1e7]:
+        print(f"    β/α = {beta_ratio:.0e} ...", end=" ", flush=True)
+        t0 = time.time()
+        out = run_nst(ct, st, DEVICE, content_weight=1.0, style_weight=beta_ratio,
+                      num_steps=NST_STEPS, optimizer=NST_OPTIM, verbose=False)
+        ablation_imgs[beta_ratio] = out
+        print(f"{time.time()-t0:.1f}s")
 
-fig, axes = plt.subplots(1, 5, figsize=(20, 4))
-fig.patch.set_facecolor("#111")
-titles = ["Content", "Style"] + [f"β/α = {r:.0e}" for r in [1e3, 1e5, 1e7]]
-imgs   = [Image.open(cpath).convert("RGB"), Image.open(spath).convert("RGB")] + \
-         [tensor_to_pil(ablation_imgs[r]) for r in [1e3, 1e5, 1e7]]
-colors = ["white","#FBD38D","#68D391","#63B3ED","#FC8181"]
-for ax, img, title, color in zip(axes, imgs, titles, colors):
-    ax.imshow(img); ax.axis("off")
-    ax.set_title(title, color=color, fontsize=12, fontweight="bold")
-fig.suptitle("β/α Style Weight Ablation  (Gatys et al. 2015)", color="white", fontsize=13,
-             fontweight="bold")
-plt.tight_layout()
-fig.savefig(OUTPUT_DIR/"beta_alpha_ablation.png", dpi=120, bbox_inches="tight", facecolor="#111")
-plt.close()
-print(f"  ✓  beta_alpha_ablation.png saved")
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
+    fig.patch.set_facecolor("#111")
+    titles = ["Content", "Style"] + [f"β/α = {r:.0e}" for r in [1e3, 1e5, 1e7]]
+    imgs   = [Image.open(cpath).convert("RGB"), Image.open(spath).convert("RGB")] + \
+             [tensor_to_pil(ablation_imgs[r]) for r in [1e3, 1e5, 1e7]]
+    colors = ["white","#FBD38D","#68D391","#63B3ED","#FC8181"]
+    for ax, img, title, color in zip(axes, imgs, titles, colors):
+        ax.imshow(img); ax.axis("off")
+        ax.set_title(title, color=color, fontsize=12, fontweight="bold")
+    fig.suptitle(f"β/α Style Weight Ablation — {spath.stem.replace('style_','').capitalize()}", color="white", fontsize=13,
+                 fontweight="bold")
+    plt.tight_layout()
+    out_name = f"beta_alpha_ablation_{spath.stem}.png"
+    fig.savefig(OUTPUT_DIR/out_name, dpi=120, bbox_inches="tight", facecolor="#111")
+    plt.close()
+    print(f"  ✓  {out_name} saved")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3.  LAYER ABLATION  (shallow-only vs deep-only)
+# 3.  LAYER ABLATION (Rigorous: for every style)
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
-print("  [3/7] Layer Ablation (shallow vs deep)")
+print("  [3/7] Layer Ablation (shallow vs deep) for ALL styles")
 print("="*60)
 
 shallow_layers = ["relu1_1", "relu2_1"]
 deep_layers    = ["relu4_1", "relu5_1"]
 
-for name, layers in [("shallow", shallow_layers), ("deep", deep_layers)]:
-    print(f"  {name} layers {layers} ...", end=" ", flush=True)
-    t0 = time.time()
-    out = run_nst(ct, st, DEVICE, style_layers=layers,
-                  content_weight=1.0, style_weight=1e5,
-                  num_steps=NST_STEPS, optimizer=NST_OPTIM, verbose=False)
-    ablation_imgs[name] = out
-    print(f"{time.time()-t0:.1f}s")
+for si, spath in enumerate(STYLE_FILES):
+    print(f"\n  Style {si+1}/{len(STYLE_FILES)}: {spath.name}")
+    st = nst_load_image(spath, size=NST_SIZE).to(DEVICE)
+    
+    ablation_imgs = {}
+    for name, layers in [("shallow", shallow_layers), ("deep", deep_layers)]:
+        print(f"    {name} layers {layers} ...", end=" ", flush=True)
+        t0 = time.time()
+        out = run_nst(ct, st, DEVICE, style_layers=layers,
+                      content_weight=1.0, style_weight=1e5,
+                      num_steps=NST_STEPS, optimizer=NST_OPTIM, verbose=False)
+        ablation_imgs[name] = out
+        print(f"{time.time()-t0:.1f}s")
 
-fig, axes = plt.subplots(1, 4, figsize=(16, 4))
-fig.patch.set_facecolor("#111")
-panels = [
-    ("Content",           Image.open(cpath).convert("RGB"),        "white"),
-    ("Style",             Image.open(spath).convert("RGB"),         "#FBD38D"),
-    ("Shallow\nrelu1_1+relu2_1\n(texture/colour only)", tensor_to_pil(ablation_imgs["shallow"]), "#68D391"),
-    ("Deep\nrelu4_1+relu5_1\n(structure + coarse texture)", tensor_to_pil(ablation_imgs["deep"]),   "#FC8181"),
-]
-for ax, (title, img, color) in zip(axes, panels):
-    ax.imshow(img); ax.axis("off")
-    ax.set_title(title, color=color, fontsize=10, fontweight="bold")
-fig.suptitle("Layer Ablation: Shallow vs Deep Style Layers", color="white", fontsize=12,
-             fontweight="bold")
-plt.tight_layout()
-fig.savefig(OUTPUT_DIR/"layer_ablation.png", dpi=120, bbox_inches="tight", facecolor="#111")
-plt.close()
-print(f"  ✓  layer_ablation.png saved")
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+    fig.patch.set_facecolor("#111")
+    panels = [
+        ("Content",           Image.open(cpath).convert("RGB"),        "white"),
+        ("Style",             Image.open(spath).convert("RGB"),         "#FBD38D"),
+        ("Shallow\nrelu1_1+relu2_1\n(texture/colour only)", tensor_to_pil(ablation_imgs["shallow"]), "#68D391"),
+        ("Deep\nrelu4_1+relu5_1\n(structure + coarse texture)", tensor_to_pil(ablation_imgs["deep"]),   "#FC8181"),
+    ]
+    for ax, (title, img, color) in zip(axes, panels):
+        ax.imshow(img); ax.axis("off")
+        ax.set_title(title, color=color, fontsize=10, fontweight="bold")
+    fig.suptitle(f"Layer Ablation: Shallow vs Deep — {spath.stem.replace('style_','').capitalize()}", color="white", fontsize=12,
+                 fontweight="bold")
+    plt.tight_layout()
+    out_name = f"layer_ablation_{spath.stem}.png"
+    fig.savefig(OUTPUT_DIR/out_name, dpi=120, bbox_inches="tight", facecolor="#111")
+    plt.close()
+    print(f"  ✓  {out_name} saved")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -396,13 +405,12 @@ print(f"  ✓  feature_maps.png saved")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6.  VIDEOS  (background / subject / full)
+# 6.  VIDEOS  (background / subject / full) — Multi-Style
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
-print("  [6/7] Stylized Videos (background / subject / full)")
+print("  [6/7] Stylized Videos (background / subject / full) — Multi-Style")
 print("="*60)
 
-STYLE_FOR_VIDEO = STYLE_FILES[0]   # starry style
 VIDEO_NST_SIZE  = 224
 VIDEO_STEPS     = 60
 VIDEO_BETA      = 1e5
@@ -416,15 +424,10 @@ total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 cap.release()
 n_frames_video = min(total_f, 300)   # ~12 s cap
 
-style_t = nst_load_image(STYLE_FOR_VIDEO, size=VIDEO_NST_SIZE).to(DEVICE)
-
-# Pre-compute style Grams once
-all_layers = ["relu1_1","relu2_1","relu3_1","relu4_1","relu5_1","relu4_2"]
-ext2 = VGG19FeatureExtractor(all_layers, DEVICE)
-ext2.eval()
-with torch.no_grad():
-    sfts  = ext2(style_t)
-    sgrams = {n: gram_matrix(sfts[n]).detach() for n in all_layers if n != "relu4_2"}
+# Pre-load all styles for the video
+style_tensors = [nst_load_image(s, size=VIDEO_NST_SIZE).to(DEVICE) for s in STYLE_FILES]
+n_styles = len(style_tensors)
+frames_per_style = n_frames_video // n_styles
 
 def make_video(out_path: Path, mode: str):
     cap = cv2.VideoCapture(str(VIDEO_PATH))
@@ -432,20 +435,31 @@ def make_video(out_path: Path, mode: str):
     writer = cv2.VideoWriter(str(out_path), fourcc, fps, (W_vid, H_vid))
     prev = None
     t0 = time.time()
+    
     for fi in range(n_frames_video):
         ret, frame = cap.read()
         if not ret: break
+        
+        # Determine current style based on frame index
+        style_idx = min(fi // frames_per_style, n_styles - 1)
+        style_t = style_tensors[style_idx]
+        
         # Resize for NST
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_r = Image.fromarray(rgb).resize((VIDEO_NST_SIZE, VIDEO_NST_SIZE), Image.LANCZOS)
         ct = transforms.ToTensor()(pil_r).unsqueeze(0).to(DEVICE)
+        
+        # If we just switched styles, we might want to clear 'prev' to avoid ghosting,
+        # but the user might prefer a smooth transition. Let's keep 'prev' for continuity.
         if prev is not None and prev.shape != ct.shape:
             prev = F.interpolate(prev, ct.shape[2:], mode="bilinear", align_corners=False)
+            
         stylised = run_nst(ct, style_t, DEVICE,
                            content_weight=1.0, style_weight=VIDEO_BETA,
                            num_steps=VIDEO_STEPS, optimizer=VIDEO_OPTIM,
                            init_tensor=prev, verbose=False)
         prev = stylised.detach()
+        
         if mode == "full":
             out_frame = (t2np(F.interpolate(stylised,(H_vid,W_vid),mode="bilinear",align_corners=False)))
             out_bgr   = cv2.cvtColor(out_frame, cv2.COLOR_RGB2BGR)
@@ -453,9 +467,12 @@ def make_video(out_path: Path, mode: str):
             alpha = get_alpha(matting_model, frame)
             out_bgr = composite(frame, stylised, alpha, mode=mode)
         writer.write(out_bgr)
+        
         if (fi+1) % 30 == 0:
             elapsed = time.time()-t0
-            print(f"    frame {fi+1}/{n_frames_video}  |  {(fi+1)/elapsed:.1f} fr/s  |  ETA {(n_frames_video-fi-1)/(max((fi+1)/elapsed,0.01))/60:.1f} min")
+            style_name = STYLE_FILES[style_idx].name
+            print(f"    frame {fi+1}/{n_frames_video} | Style: {style_name} | {(fi+1)/elapsed:.1f} fr/s | ETA {(n_frames_video-fi-1)/(max((fi+1)/elapsed,0.01))/60:.1f} min")
+            
     cap.release(); writer.release()
     print(f"  ✓  {out_path.name} saved")
 
