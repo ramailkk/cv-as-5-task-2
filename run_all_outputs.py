@@ -119,15 +119,31 @@ def get_alpha(model, frame_bgr: np.ndarray) -> np.ndarray:
     return np.clip(blended, 0, 1).astype(np.float32)
 
 def composite(frame_bgr, stylised_t, alpha_map, mode="background"):
+    """
+    frame_bgr   : (H, W, 3) uint8 BGR
+    stylised_t  : (1, 3, H_nst, W_nst) ImageNet-normalised tensor (new nst.py output)
+    alpha_map   : (H, W) float32 in [0,1]
+    mode        : "background" or "subject"
+    """
     H, W = frame_bgr.shape[:2]
-    stylised_rgb = tensor_to_uint8(stylised_t)
+
+    # Resize stylised tensor to original frame size
+    stylised_resized = F.interpolate(
+        stylised_t, size=(H, W), mode="bilinear", align_corners=False
+    )  # shape: (1, 3, H, W)
+
+    # Convert to uint8 RGB then BGR float [0,1]
+    stylised_rgb = tensor_to_uint8(stylised_resized)   # (H, W, 3) uint8 RGB
     stylised_bgr = cv2.cvtColor(stylised_rgb, cv2.COLOR_RGB2BGR).astype(np.float32) / 255.0
+
     f = frame_bgr.astype(np.float32) / 255.0
-    a = alpha_map[:, :, np.newaxis]
+    a = alpha_map[:, :, np.newaxis]   # (H, W, 1)
+
     if mode == "background":
         out = a * f + (1 - a) * stylised_bgr
-    else:
+    else:  # subject
         out = a * stylised_bgr + (1 - a) * f
+
     return (out.clip(0, 1) * 255).astype(np.uint8)
 
 # ----------------------------------------------------------------------
