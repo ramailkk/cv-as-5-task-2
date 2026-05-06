@@ -158,10 +158,18 @@ def run_nst(
         target_style.append(gram)
 
     # ---- initialise optimisation image ----
+    # ---- initialise the optimising image (ensure leaf tensor) ----
     if init_tensor is not None:
-        opt_img = init_tensor.clone().detach().requires_grad_(True).contiguous()
+        # Create a new leaf tensor and copy values
+        opt_img = torch.empty_like(init_tensor)
+        opt_img.data.copy_(init_tensor.data)   # copy without grad history
+        opt_img.requires_grad_(True)
     else:
-        opt_img = content_tensor.clone().detach().requires_grad_(True).contiguous()
+        opt_img = torch.empty_like(content_tensor)
+        opt_img.data.copy_(content_tensor.data)
+        opt_img.requires_grad_(True)
+    # Make contiguous (avoids view/stride issues later)
+    opt_img = opt_img.contiguous()
 
     content_w = cfg.get("content_weight", 1e5)
     style_w   = cfg.get("style_weight",   3e4)
