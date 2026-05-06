@@ -159,9 +159,9 @@ def run_nst(
 
     # ---- initialise optimisation image ----
     if init_tensor is not None:
-        opt_img = init_tensor.clone().detach().requires_grad_(True)
+        opt_img = init_tensor.clone().detach().requires_grad_(True).contiguous()
     else:
-        opt_img = content_tensor.clone().detach().requires_grad_(True)
+        opt_img = content_tensor.clone().detach().requires_grad_(True).contiguous()
 
     content_w = cfg.get("content_weight", 1e5)
     style_w   = cfg.get("style_weight",   3e4)
