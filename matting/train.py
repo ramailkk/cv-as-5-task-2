@@ -44,8 +44,8 @@ try:
 except ImportError:
     HAS_TQDM = False
 
-from model   import build_matting_model
-from dataset import build_dataloaders
+from matting.model   import build_matting_model
+from matting.dataset import build_dataloaders
 
 
 # ─────────────────────────────────────────────────────────────────────────────

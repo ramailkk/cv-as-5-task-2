@@ -175,8 +175,8 @@ def plot_predictions(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    from model   import build_matting_model
-    from dataset import AISegmentDataset
+    from matting.model   import build_matting_model
+    from matting.dataset import AISegmentDataset
 
     # ── Load model ────────────────────────────────────────────────────────
     arch  = cfg["matting"]["architecture"]

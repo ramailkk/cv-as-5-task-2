@@ -60,7 +60,7 @@ from PIL import Image
 from torchvision import transforms
 
 sys.path.insert(0, str(Path(__file__).parent))
-from model import build_matting_model
+from matting.model import build_matting_model
 from nst import (
     VGG19FeatureExtractor,
     VGG19_LAYER_MAP,

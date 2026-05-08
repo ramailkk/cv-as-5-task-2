@@ -39,7 +39,7 @@ from torchvision import transforms
 
 # ── Allow running from project root without installing as a package ──────────
 sys.path.insert(0, str(Path(__file__).parent))
-from model import build_matting_model
+from matting.model import build_matting_model
 
 
 # ─────────────────────────────────────────────────────────────────────────────
