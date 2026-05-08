@@ -273,8 +273,9 @@ BETA_RATIOS  = [1e3, 1e5, 1e7]
 BETA_COLORS  = [PALETTE["beta_1e3"], PALETTE["beta_1e5"], PALETTE["beta_1e7"]]
 BETA_LABELS  = [f"β/α = {r:.0e}" for r in BETA_RATIOS]
 
-# Rows: one per (content, style) pair; Columns: Content | Style | 1e3 | 1e5 | 1e7
-pairs = [(ci, si) for ci in range(NC) for si in range(NS)]
+# Rows: one representative frame (content[2]) × every style
+ablation_ci = min(2, NC - 1)
+pairs = [(ablation_ci, si) for si in range(NS)]
 N_PAIRS = len(pairs)
 N_COLS  = 5   # content + style + 3 beta
 
@@ -301,7 +302,7 @@ col_colors  = [PALETTE["content"], PALETTE["style"]] + BETA_COLORS
 
 # Column headers (drawn once as figure-level text at top)
 fig.text(0.5, 1.0 - 0.3 / fig_h,
-         "Style Weight (β/α) Ablation Study — All Content × All Styles",
+         f"Style Weight (β/α) Ablation Study — {content_label(CONTENT_FILES[ablation_ci])} × All Styles",
          ha="center", va="top", color=PALETTE["text"],
          fontsize=16, fontweight="bold", transform=fig.transFigure)
 
@@ -409,7 +410,7 @@ layer_col_titles  = ["Content", "Style"] + [lc[0] for lc in LAYER_CONFIGS]
 layer_col_colors  = [PALETTE["content"], PALETTE["style"]] + [lc[2] for lc in LAYER_CONFIGS]
 
 fig.text(0.5, 1.0 - 0.3 / fig_h2,
-         "Style Layer Ablation Study — All Content × All Styles",
+         f"Style Layer Ablation Study — {content_label(CONTENT_FILES[ablation_ci])} × All Styles",
          ha="center", va="top", color=PALETTE["text"],
          fontsize=16, fontweight="bold", transform=fig.transFigure)
 
