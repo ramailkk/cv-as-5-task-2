@@ -144,7 +144,7 @@ def main() -> None:
     cfg_path = Path(args.config)
     if not cfg_path.exists():
         raise FileNotFoundError(f"Config not found: {cfg_path}")
-    with open(cfg_path) as fh:
+    with open(cfg_path, encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh)
 
     device = torch.device(

@@ -207,7 +207,7 @@ def main() -> None:
             f"Config not found: {cfg_path.resolve()}\n"
             "Run from the project root: python train.py"
         )
-    with open(cfg_path) as fh:
+    with open(cfg_path, encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh)
 
     set_seed(cfg["seed"])
