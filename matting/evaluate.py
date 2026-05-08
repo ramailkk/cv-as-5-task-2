@@ -30,7 +30,9 @@ try:
 except ImportError:
     HAS_TQDM = False
 
-sys.path.insert(0, str(Path(__file__).parent))
+if str(Path(__file__).parent.parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from matting.model   import build_matting_model
 from matting.dataset import build_dataloaders
 

@@ -38,7 +38,11 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import FancyBboxPatch
 
-sys.path.insert(0, str(Path(__file__).parent))
+if str(Path(__file__).parent.parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from matting.model   import build_matting_model
+from matting.dataset import AISegmentDataset
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -174,9 +178,6 @@ def plot_predictions(
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    from matting.model   import build_matting_model
-    from matting.dataset import AISegmentDataset
 
     # ── Load model ────────────────────────────────────────────────────────
     arch  = cfg["matting"]["architecture"]

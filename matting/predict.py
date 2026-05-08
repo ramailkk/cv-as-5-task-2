@@ -38,7 +38,9 @@ from PIL import Image
 from torchvision import transforms
 
 # ── Allow running from project root without installing as a package ──────────
-sys.path.insert(0, str(Path(__file__).parent))
+if str(Path(__file__).parent.parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from matting.model import build_matting_model
 
 
