@@ -88,11 +88,11 @@ _IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225])
 # the style loss so the absolute magnitudes remain stable as layers are added/
 # removed.
 _DEFAULT_STYLE_LAYER_WEIGHTS = {
-    "relu1_1": 1.0,   # fine textures (highest weight)
-    "relu2_1": 0.8,
-    "relu3_1": 0.6,
-    "relu4_1": 0.4,
-    "relu5_1": 0.2,   # coarse structure (lowest weight)
+    "relu1_1": 1.0,
+    "relu2_1": 1.0,
+    "relu3_1": 1.0,
+    "relu4_1": 1.0,
+    "relu5_1": 1.0,
 }
 
 
@@ -202,11 +202,15 @@ def style_loss(
     layer_weights: dict[str, float],
 ) -> torch.Tensor:
     """
-    Weighted sum of MSE between Gram matrices across style layers.
-    Weights are normalised so they sum to 1 — this keeps the overall
-    style loss magnitude independent of which/how many layers are used.
+    Weighted sum of self-normalised style loss across style layers.
+
+    Each layer's loss is divided by the squared Frobenius norm of its own
+    style Gram matrix.  This makes the loss dimensionless and ensures shallow
+    layers (small spatial size, large gram values) and deep layers contribute
+    equally — preventing deep layers from numerically drowning out the fine
+    texture signal in relu1_1/relu2_1 that carries Van Gogh's swirls etc.
     """
-    total_w = sum(layer_weights[n] for n in style_grams)
+    total_w = sum(layer_weights.get(n, 1.0) for n in style_grams)
     if total_w == 0:
         total_w = 1.0
 
@@ -215,7 +219,9 @@ def style_loss(
         w       = layer_weights.get(name, 1.0) / total_w
         G_gen   = gram_matrix(gen_feats[name])
         G_style = style_grams[name]
-        loss    = loss + w * F.mse_loss(G_gen, G_style)
+        # Self-normalise by the style gram's own energy — key fix
+        denom   = (2.0 * (G_style.norm() ** 2)).clamp(min=1e-8)
+        loss    = loss + w * torch.sum((G_gen - G_style) ** 2) / denom
     return loss
 
 
@@ -304,9 +310,9 @@ def run_nst(
     style_layers:   list[str] = None,
     style_layer_weights: list[float] = None,
     content_weight: float = 1.0,        # α
-    style_weight:   float = 1e5,        # β
-    tv_weight:      float = 1e-4,       # γ — TV regularisation
-    num_steps:      int   = 300,
+    style_weight:   float = 1e6,        # β  — raised default; loss is now self-normalised
+    tv_weight:      float = 5e-5,       # γ — lowered: let brushstrokes come through
+    num_steps:      int   = 400,        # more steps for deeper style penetration
     optimizer:      str   = "lbfgs",    # "lbfgs" | "adam"
     init_tensor:    Optional[torch.Tensor] = None,
     histogram_init: bool  = True,       # colour-match warm-start
@@ -422,12 +428,11 @@ def _run_nst_single_scale(
     content_tensor = content_tensor.to(device)
     style_tensor   = style_tensor.to(device)
 
-    # Resize style to match content spatial dims
-    if style_tensor.shape[2:] != content_tensor.shape[2:]:
-        style_tensor = F.interpolate(
-            style_tensor, size=content_tensor.shape[2:],
-            mode="bilinear", align_corners=False,
-        )
+    # NOTE: Do NOT resize style to match content here.
+    # The Gram matrix is spatially invariant — style statistics are richer
+    # when computed at the style image's own (higher) resolution.
+    # We only need style and content at the same size for the *generated* image,
+    # not for computing the target Gram matrices.
 
     # Pre-compute targets
     with torch.no_grad():
@@ -446,8 +451,17 @@ def _run_nst_single_scale(
         if init.shape[2:] != content_tensor.shape[2:]:
             init = F.interpolate(init, content_tensor.shape[2:], mode="bilinear", align_corners=False)
         gen = init.clamp(0, 1)
+    elif style_weight >= 1e6 and histogram_init:
+        # For high style weights, start from the style image resized to content dims.
+        # This puts us in a region of pixel-space already rich with style colour/texture,
+        # avoiding the local minimum where the optimiser keeps the content colours and
+        # only partially transfers the style palette (causing "flat blue" artefacts).
+        gen = F.interpolate(
+            style_tensor.clone(), size=content_tensor.shape[2:],
+            mode="bilinear", align_corners=False,
+        ).clamp(0, 1)
     elif histogram_init:
-        # Warm-start: match content colours to style palette
+        # Moderate style weights: colour-match warm-start is sufficient
         gen = histogram_match(content_tensor.cpu(), style_tensor.cpu()).to(device)
     else:
         gen = content_tensor.clone()

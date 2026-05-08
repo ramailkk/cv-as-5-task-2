@@ -60,7 +60,7 @@ from PIL import Image
 from torchvision import transforms
 
 sys.path.insert(0, str(Path(__file__).parent))
-from matting.model import build_matting_model
+from model import build_matting_model
 from nst import (
     VGG19FeatureExtractor,
     VGG19_LAYER_MAP,
@@ -375,7 +375,7 @@ def run_pipeline(
     matting_model = load_matting_model(weights_path, matting_arch, device)
 
     print("  Loading style image and pre-computing style Grams…")
-    style_tensor = nst_load_image(style_path, size=nst_size).to(device)
+    style_tensor = nst_load_image(style_path, size=nst_size * 2).to(device)  # 2× for richer Grams
 
     # Pre-compute style Gram matrices (same for every frame)
     all_nst_layers = list(set([content_layer] + style_layers))
