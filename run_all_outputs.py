@@ -669,7 +669,7 @@ VIDEO_NST_SIZE = 224
 VIDEO_STEPS    = 60
 VIDEO_BETA     = 1e5       # keep style visible but don't obliterate face
 VIDEO_OPTIM    = "lbfgs"
-VIDEO_CONTENT_WEIGHT = 10.0   # raised α: face/structure must survive
+VIDEO_CONTENT_WEIGHT = 20.0   # raised α: face/structure must survive
 
 cap = cv2.VideoCapture(str(VIDEO_PATH))
 fps     = cap.get(cv2.CAP_PROP_FPS) or 25.0
