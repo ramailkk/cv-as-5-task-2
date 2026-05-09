@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 sys.path.insert(0, str(Path(__file__).parent))
-from model import build_matting_model
+from matting.model import build_matting_model
 from nst import (
     VGG19FeatureExtractor, VGG19_LAYER_MAP, gram_matrix,
     run_nst, load_image as nst_load_image, tensor_to_pil,
