@@ -45,7 +45,7 @@ from PIL import Image, ImageDraw, ImageFont
 from torchvision import transforms
 
 sys.path.insert(0, str(Path(__file__).parent))
-from matting.model import build_matting_model
+from model import build_matting_model
 from nst import (
     VGG19FeatureExtractor, VGG19_LAYER_MAP, gram_matrix,
     run_nst, load_image as nst_load_image, tensor_to_pil,
@@ -669,7 +669,7 @@ VIDEO_NST_SIZE = 224
 VIDEO_STEPS    = 60
 VIDEO_BETA     = 1e5       # keep style visible but don't obliterate face
 VIDEO_OPTIM    = "lbfgs"
-VIDEO_CONTENT_WEIGHT = 20.0   # raised α: face/structure must survive
+VIDEO_CONTENT_WEIGHT = 10.0   # raised α: face/structure must survive
 
 cap = cv2.VideoCapture(str(VIDEO_PATH))
 fps     = cap.get(cv2.CAP_PROP_FPS) or 25.0
@@ -796,9 +796,9 @@ def make_video(out_path: Path, mode: str):
     print(f"  ✓  {out_path.name} saved")
 
 
-make_video(OUTPUT_DIR / "stylized_full.mp4",       mode="full")
 make_video(OUTPUT_DIR / "stylized_background.mp4", mode="background")
 make_video(OUTPUT_DIR / "stylized_subject.mp4",    mode="subject")
+make_video(OUTPUT_DIR / "stylized_full.mp4",       mode="full")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
