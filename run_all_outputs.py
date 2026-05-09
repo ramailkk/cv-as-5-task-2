@@ -45,7 +45,7 @@ from PIL import Image, ImageDraw, ImageFont
 from torchvision import transforms
 
 sys.path.insert(0, str(Path(__file__).parent))
-from matting.model import build_matting_model
+from model import build_matting_model
 from nst import (
     VGG19FeatureExtractor, VGG19_LAYER_MAP, gram_matrix,
     run_nst, load_image as nst_load_image, tensor_to_pil,
@@ -69,6 +69,7 @@ INPUT_SIZE   = (320, 320)
 CONTENT_FILES = sorted(CONTENT_DIR.glob("*.jpg"))
 STYLE_FILES   = sorted(STYLE_DIR.glob("*.jpg"))
 NST_SIZE      = 256
+NST_STYLE_SIZE = 512   # style loaded at 2× — richer Gram statistics
 NST_STEPS     = 150
 NST_OPTIM     = "lbfgs"
 
@@ -212,7 +213,7 @@ grid_results: dict[tuple, torch.Tensor] = {}
 for ci, cpath in enumerate(CONTENT_FILES):
     ct = nst_load_image(cpath, size=NST_SIZE).to(DEVICE)
     for si, spath in enumerate(STYLE_FILES):
-        st = nst_load_image(spath, size=NST_SIZE).to(DEVICE)
+        st = nst_load_image(spath, size=NST_STYLE_SIZE).to(DEVICE)
         print(f"  {cpath.name} × {spath.name} ...", end=" ", flush=True)
         t0 = time.time()
         out = run_nst(ct, st, DEVICE, content_weight=1.0, style_weight=1e5,
@@ -273,9 +274,10 @@ BETA_RATIOS  = [1e3, 1e5, 1e7]
 BETA_COLORS  = [PALETTE["beta_1e3"], PALETTE["beta_1e5"], PALETTE["beta_1e7"]]
 BETA_LABELS  = [f"β/α = {r:.0e}" for r in BETA_RATIOS]
 
-# Rows: one representative frame (content[2]) × every style
-ablation_ci = min(2, NC - 1)
-pairs = [(ablation_ci, si) for si in range(NS)]
+# Rows: one per (content, style) pair; Columns: Content | Style | 1e3 | 1e5 | 1e7
+# One representative content frame for all ablations
+_abl_ci = min(2, NC - 1)
+pairs = [(_abl_ci, si) for si in range(NS)]
 N_PAIRS = len(pairs)
 N_COLS  = 5   # content + style + 3 beta
 
@@ -302,7 +304,7 @@ col_colors  = [PALETTE["content"], PALETTE["style"]] + BETA_COLORS
 
 # Column headers (drawn once as figure-level text at top)
 fig.text(0.5, 1.0 - 0.3 / fig_h,
-         f"Style Weight (β/α) Ablation Study — {content_label(CONTENT_FILES[ablation_ci])} × All Styles",
+         f"Style Weight (β/α) Ablation Study — {content_label(CONTENT_FILES[_abl_ci])} × All Styles",
          ha="center", va="top", color=PALETTE["text"],
          fontsize=16, fontweight="bold", transform=fig.transFigure)
 
@@ -322,7 +324,7 @@ for row_idx, (ci, si) in enumerate(pairs):
     # Run NST for all beta ratios (reuse grid_results for 1e5)
     ablation_imgs = {}
     ct = nst_load_image(cpath, size=NST_SIZE).to(DEVICE)
-    st = nst_load_image(spath, size=NST_SIZE).to(DEVICE)
+    st = nst_load_image(spath, size=NST_STYLE_SIZE).to(DEVICE)
     for beta_ratio in BETA_RATIOS:
         if beta_ratio == 1e5 and (ci, si) in grid_results:
             ablation_imgs[beta_ratio] = grid_results[(ci, si)]
@@ -341,26 +343,12 @@ for row_idx, (ci, si) in enumerate(pairs):
         pil_resize_sq(spath, NST_SIZE),
     ] + [tensor_to_pil(ablation_imgs[r]) for r in BETA_RATIOS]
 
-    # Draw a horizontal divider line when content group changes
-    if ci != prev_ci and row_idx > 0:
-        fig.add_artist(
-            plt.Line2D(
-                [PAD_LEFT / fig_w, 0.995],
-                [(fig_h - 0.6 - row_idx * CELL_H) / fig_h] * 2,
-                transform=fig.transFigure,
-                color=PALETTE["divider"], lw=1.5, zorder=10,
-            )
-        )
-    prev_ci = ci
-
-    # Row label: "<content_name> × <style_name>"
     row_y_frac = (fig_h - 0.6 - (row_idx + 0.5) * CELL_H) / fig_h
     fig.text(
         PAD_LEFT / fig_w - 0.005, row_y_frac,
-        f"{content_label(cpath)}\n× {style_label(spath)}",
+        style_label(spath),
         ha="right", va="center", color=PALETTE["text"],
-        fontsize=8.5, fontweight="bold", transform=fig.transFigure,
-        multialignment="right",
+        fontsize=9, fontweight="bold", transform=fig.transFigure,
     )
 
     for col_idx, (img, col_color) in enumerate(zip(imgs, [None, None] + BETA_COLORS)):
@@ -410,7 +398,7 @@ layer_col_titles  = ["Content", "Style"] + [lc[0] for lc in LAYER_CONFIGS]
 layer_col_colors  = [PALETTE["content"], PALETTE["style"]] + [lc[2] for lc in LAYER_CONFIGS]
 
 fig.text(0.5, 1.0 - 0.3 / fig_h2,
-         f"Style Layer Ablation Study — {content_label(CONTENT_FILES[ablation_ci])} × All Styles",
+         f"Style Layer Ablation Study — {content_label(CONTENT_FILES[_abl_ci])} × All Styles",
          ha="center", va="top", color=PALETTE["text"],
          fontsize=16, fontweight="bold", transform=fig.transFigure)
 
@@ -427,7 +415,7 @@ prev_ci2 = -1
 for row_idx, (ci, si) in enumerate(pairs):
     cpath, spath = CONTENT_FILES[ci], STYLE_FILES[si]
     ct = nst_load_image(cpath, size=NST_SIZE).to(DEVICE)
-    st = nst_load_image(spath, size=NST_SIZE).to(DEVICE)
+    st = nst_load_image(spath, size=NST_STYLE_SIZE).to(DEVICE)
 
     layer_imgs = {}
     for label, layers, color in LAYER_CONFIGS:
@@ -444,24 +432,12 @@ for row_idx, (ci, si) in enumerate(pairs):
             layer_imgs[label] = out
             print(f"{time.time() - t0:.1f}s")
 
-    if ci != prev_ci2 and row_idx > 0:
-        fig.add_artist(
-            plt.Line2D(
-                [PAD_LEFT / fig_w2, 0.995],
-                [(fig_h2 - 0.6 - row_idx * CELL_H2) / fig_h2] * 2,
-                transform=fig.transFigure,
-                color=PALETTE["divider"], lw=1.5, zorder=10,
-            )
-        )
-    prev_ci2 = ci
-
     row_y_frac = (fig_h2 - 0.6 - (row_idx + 0.5) * CELL_H2) / fig_h2
     fig.text(
         PAD_LEFT / fig_w2 - 0.005, row_y_frac,
-        f"{content_label(cpath)}\n× {style_label(spath)}",
+        style_label(spath),
         ha="right", va="center", color=PALETTE["text"],
-        fontsize=8.5, fontweight="bold", transform=fig.transFigure,
-        multialignment="right",
+        fontsize=9, fontweight="bold", transform=fig.transFigure,
     )
 
     imgs2 = [pil_resize_sq(cpath, NST_SIZE), pil_resize_sq(spath, NST_SIZE)] + \
@@ -521,7 +497,7 @@ for col_idx, (title, color) in enumerate(zip(opt_col_titles, opt_col_colors)):
              multialignment="center")
 
 for si, spath in enumerate(STYLE_FILES):
-    st = nst_load_image(spath, size=NST_SIZE).to(DEVICE)
+    st = nst_load_image(spath, size=NST_STYLE_SIZE).to(DEVICE)
     opt_imgs = {}
     for optim_name in ["adam", "lbfgs"]:
         print(f"  {spath.name}  optimizer={optim_name} …", end=" ", flush=True)
@@ -691,8 +667,9 @@ print("=" * 60)
 
 VIDEO_NST_SIZE = 224
 VIDEO_STEPS    = 60
-VIDEO_BETA     = 1e5
+VIDEO_BETA     = 1e5       # keep style visible but don't obliterate face
 VIDEO_OPTIM    = "lbfgs"
+VIDEO_CONTENT_WEIGHT = 10.0   # raised α: face/structure must survive
 
 cap = cv2.VideoCapture(str(VIDEO_PATH))
 fps     = cap.get(cv2.CAP_PROP_FPS) or 25.0
@@ -702,7 +679,7 @@ total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 cap.release()
 n_frames_video = min(total_f, 300)
 
-style_tensors = [nst_load_image(s, size=VIDEO_NST_SIZE).to(DEVICE) for s in STYLE_FILES]
+style_tensors = [nst_load_image(s, size=VIDEO_NST_SIZE * 2).to(DEVICE) for s in STYLE_FILES]
 n_styles_v    = len(style_tensors)
 frames_per_style = max(1, n_frames_video // n_styles_v)
 
@@ -769,11 +746,12 @@ def make_video(out_path: Path, mode: str):
 
         stylised = run_nst(
             ct, style_t, DEVICE,
-            content_weight=1.0, style_weight=VIDEO_BETA,
-            tv_weight=1e-4,
+            content_weight=VIDEO_CONTENT_WEIGHT,
+            style_weight=VIDEO_BETA,
+            tv_weight=5e-5,
             num_steps=VIDEO_STEPS, optimizer=VIDEO_OPTIM,
             init_tensor=init_t,
-            histogram_init=(init_t is None),
+            histogram_init=(init_t is None),  # hist-match on frame 0, warp-init after
             multiscale=False,
             verbose=False,
         )

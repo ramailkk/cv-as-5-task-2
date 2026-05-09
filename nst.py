@@ -451,11 +451,12 @@ def _run_nst_single_scale(
         if init.shape[2:] != content_tensor.shape[2:]:
             init = F.interpolate(init, content_tensor.shape[2:], mode="bilinear", align_corners=False)
         gen = init.clamp(0, 1)
-    elif style_weight >= 1e6 and histogram_init:
-        # For high style weights, start from the style image resized to content dims.
+    elif (style_weight / max(content_weight, 1e-8)) >= 1e6 and histogram_init:
+        # For very high β/α ratios, start from the style image resized to content dims.
         # This puts us in a region of pixel-space already rich with style colour/texture,
-        # avoiding the local minimum where the optimiser keeps the content colours and
-        # only partially transfers the style palette (causing "flat blue" artefacts).
+        # avoiding the local minimum where the optimiser keeps content colours and only
+        # partially transfers the style palette (causing "flat blue" artefacts).
+        # NOT triggered for video (β/α ~ 1e4) so face structure is preserved there.
         gen = F.interpolate(
             style_tensor.clone(), size=content_tensor.shape[2:],
             mode="bilinear", align_corners=False,
