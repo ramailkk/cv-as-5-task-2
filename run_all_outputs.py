@@ -796,9 +796,9 @@ def make_video(out_path: Path, mode: str):
     print(f"  ✓  {out_path.name} saved")
 
 
+make_video(OUTPUT_DIR / "stylized_full.mp4",       mode="full")
 make_video(OUTPUT_DIR / "stylized_background.mp4", mode="background")
 make_video(OUTPUT_DIR / "stylized_subject.mp4",    mode="subject")
-make_video(OUTPUT_DIR / "stylized_full.mp4",       mode="full")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
